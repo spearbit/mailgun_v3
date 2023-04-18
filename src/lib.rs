@@ -21,7 +21,7 @@ const MAILGUN_DEFAULT_API: &str = "https://api.mailgun.net/v3";
 pub type MailgunResult<T> = Result<T, ReqError>;
 
 ///! Mailgun private API key and sending domain
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Credentials {
     api_base: String,
     api_key: String,
@@ -65,7 +65,7 @@ impl Credentials {
 }
 
 ///! An email address, with or without a display name
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EmailAddress {
     name: Option<String>,
     address: String,
