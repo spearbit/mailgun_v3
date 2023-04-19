@@ -11,6 +11,8 @@ extern crate serde_derive;
 pub mod email;
 pub mod validation;
 
+use lazy_static::lazy_static;
+use regex::Regex;
 use std::fmt;
 
 pub use reqwest::Error as ReqError;
@@ -71,6 +73,9 @@ pub struct EmailAddress {
     address: String,
 }
 
+// TODO: introduce address validation (RFC5322 + RFC5198 + RFC6532)
+// Could consider using the email-address-parser crate (or similar).
+
 impl EmailAddress {
     pub fn address<T: ToString>(address: T) -> Self {
         EmailAddress {
@@ -96,6 +101,97 @@ impl fmt::Display for EmailAddress {
         match self.name {
             Some(ref name) => write!(f, "{} <{}>", name, self.address),
             None => write!(f, "{}", self.address.clone()),
+        }
+    }
+}
+
+/// Basic validation of display name.
+fn is_valid_display_name(name: &str) -> bool {
+    lazy_static! {
+        static ref RE: Regex = Regex::new(r"^[^<>]+$").unwrap();
+    }
+    RE.is_match(name)
+}
+
+/// Basic validation of address.
+fn is_valid_address(address: &str) -> bool {
+    lazy_static! {
+        // TODO: use a proper regex
+        static ref RE: Regex = Regex::new(r"^[^<> ]+@[^<> ]+\.[^<> ]+$").unwrap();
+    }
+    RE.is_match(address)
+}
+
+impl<'a> TryFrom<&'a str> for EmailAddress {
+    type Error = &'static str;
+
+    /// This parser does not validate the emails, just tries to parse according to
+    /// a minimal subset of the RFC5322 rules.
+    fn try_from(input: &str) -> Result<EmailAddress, Self::Error> {
+        lazy_static! {
+            static ref RE: Regex = Regex::new(r"^(.*) <([^>]+)>$").unwrap();
+        }
+
+        let result = match RE.captures(input) {
+            Some(captures) => {
+                if captures.len() == 3 {
+                    EmailAddress::name_address(
+                        captures.get(1).unwrap().as_str(),
+                        captures.get(2).unwrap().as_str(),
+                    )
+                } else {
+                    EmailAddress::address(input)
+                }
+            }
+            None => EmailAddress::address(input),
+        };
+
+        if let Some(ref name) = result.name {
+            if !is_valid_display_name(name) {
+                return Err("Invalid display name");
+            }
+        }
+
+        if !is_valid_address(&result.address) {
+            Err("Invalid email address")
+        } else {
+            Ok(result)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_email_address() {
+        let success_cases = vec![
+            ("test@email.com", EmailAddress::address("test@email.com")),
+            (
+                "Bob Test <test@email.com>",
+                EmailAddress::name_address("Bob Test", "test@email.com"),
+            ),
+        ];
+        for (input, expected) in success_cases {
+            let result = EmailAddress::try_from(input);
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), expected);
+        }
+
+        let failure_cases = vec![
+            ("test", "Invalid email address"),
+            ("@email.com", "Invalid email address"),
+            ("Bob Test", "Invalid email address"),
+            ("Bob Test <>", "Invalid email address"),
+            ("Bob Test <test>", "Invalid email address"),
+            ("Bob Test <@email.com>", "Invalid email address"),
+            ("<Bob Test> <test@email.com>", "Invalid display name"),
+        ];
+        for (input, expected) in failure_cases {
+            let result = EmailAddress::try_from(input);
+            assert!(result.is_err());
+            assert_eq!(result.err(), Some(expected));
         }
     }
 }
