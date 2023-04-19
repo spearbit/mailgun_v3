@@ -65,7 +65,7 @@ impl Credentials {
 }
 
 ///! An email address, with or without a display name
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EmailAddress {
     name: Option<String>,
     address: String,
