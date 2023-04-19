@@ -105,6 +105,23 @@ impl fmt::Display for EmailAddress {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub enum EmailAddressError {
+    InvalidDisplayName,
+    InvalidEmailAddress,
+}
+
+impl fmt::Display for EmailAddressError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EmailAddressError::InvalidDisplayName => write!(f, "Invalid display name"),
+            EmailAddressError::InvalidEmailAddress => write!(f, "Invalid email address"),
+        }
+    }
+}
+
+impl std::error::Error for EmailAddressError {}
+
 /// Basic validation of display name.
 fn is_valid_display_name(name: &str) -> bool {
     lazy_static! {
@@ -123,7 +140,7 @@ fn is_valid_address(address: &str) -> bool {
 }
 
 impl<'a> TryFrom<&'a str> for EmailAddress {
-    type Error = String; //&'static str;
+    type Error = EmailAddressError;
 
     /// This parser does not validate the emails, just tries to parse according to
     /// a minimal subset of the RFC5322 rules.
@@ -148,12 +165,12 @@ impl<'a> TryFrom<&'a str> for EmailAddress {
 
         if let Some(ref name) = result.name {
             if !is_valid_display_name(name) {
-                return Err("Invalid display name".to_string());
+                return Err(EmailAddressError::InvalidDisplayName);
             }
         }
 
         if !is_valid_address(&result.address) {
-            Err("Invalid email address".to_string())
+            Err(EmailAddressError::InvalidEmailAddress)
         } else {
             Ok(result)
         }
@@ -180,18 +197,24 @@ mod tests {
         }
 
         let failure_cases = vec![
-            ("test", "Invalid email address"),
-            ("@email.com", "Invalid email address"),
-            ("Bob Test", "Invalid email address"),
-            ("Bob Test <>", "Invalid email address"),
-            ("Bob Test <test>", "Invalid email address"),
-            ("Bob Test <@email.com>", "Invalid email address"),
-            ("<Bob Test> <test@email.com>", "Invalid display name"),
+            ("test", EmailAddressError::InvalidEmailAddress),
+            ("@email.com", EmailAddressError::InvalidEmailAddress),
+            ("Bob Test", EmailAddressError::InvalidEmailAddress),
+            ("Bob Test <>", EmailAddressError::InvalidEmailAddress),
+            ("Bob Test <test>", EmailAddressError::InvalidEmailAddress),
+            (
+                "Bob Test <@email.com>",
+                EmailAddressError::InvalidEmailAddress,
+            ),
+            (
+                "<Bob Test> <test@email.com>",
+                EmailAddressError::InvalidDisplayName,
+            ),
         ];
         for (input, expected) in failure_cases {
             let result = EmailAddress::try_from(input);
             assert!(result.is_err());
-            assert_eq!(result.err(), Some(expected.to_string()));
+            assert_eq!(result.err(), Some(expected));
         }
     }
 }
