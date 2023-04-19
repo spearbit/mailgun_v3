@@ -123,7 +123,7 @@ fn is_valid_address(address: &str) -> bool {
 }
 
 impl<'a> TryFrom<&'a str> for EmailAddress {
-    type Error = &'static str;
+    type Error = String; //&'static str;
 
     /// This parser does not validate the emails, just tries to parse according to
     /// a minimal subset of the RFC5322 rules.
@@ -148,12 +148,12 @@ impl<'a> TryFrom<&'a str> for EmailAddress {
 
         if let Some(ref name) = result.name {
             if !is_valid_display_name(name) {
-                return Err("Invalid display name");
+                return Err("Invalid display name".to_string());
             }
         }
 
         if !is_valid_address(&result.address) {
-            Err("Invalid email address")
+            Err("Invalid email address".to_string())
         } else {
             Ok(result)
         }
@@ -191,7 +191,7 @@ mod tests {
         for (input, expected) in failure_cases {
             let result = EmailAddress::try_from(input);
             assert!(result.is_err());
-            assert_eq!(result.err(), Some(expected));
+            assert_eq!(result.err(), Some(expected.to_string()));
         }
     }
 }
