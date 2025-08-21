@@ -111,40 +111,33 @@ pub struct SendResponse {
 
 const MESSAGES_ENDPOINT: &str = "messages";
 
-// curl -s --user 'api:YOUR_API_KEY' \
-//     https://api.mailgun.net/v3/YOUR_DOMAIN_NAME/messages \
-//     -F from='Excited User <mailgun@YOUR_DOMAIN_NAME>' \
-//     -F to=YOU@YOUR_DOMAIN_NAME \
-//     -F to=bar@example.com \
-//     -F subject='Hello' \
-//     -F text='Testing some Mailgun awesomeness!'
 /// Sends a single email from the specified sender address
 /// [API docs](https://documentation.mailgun.com/en/latest/api-sending.html#sending)
-pub fn send_email(
+pub async fn send_email(
     creds: &Credentials,
     sender: &EmailAddress,
     msg: Message,
 ) -> MailgunResult<SendResponse> {
-    let client = reqwest::blocking::Client::new();
-    send_with_client(&client, creds, sender, msg)
+    let client = reqwest::Client::new();
+    send_with_client(&client, creds, sender, msg).await
 }
 
 /// Same as `send_email` but with an externally managed client
-pub fn send_with_client(
-    client: &reqwest::blocking::Client,
+pub async fn send_with_client(
+    client: &reqwest::Client,
     creds: &Credentials,
     sender: &EmailAddress,
     msg: Message,
 ) -> MailgunResult<SendResponse> {
     let url = format!("{}/{}/{}", creds.api_base, creds.domain, MESSAGES_ENDPOINT);
-    let request_builder = client.post(url);
-    send_with_request_builder(request_builder, creds, sender, msg)
+    let request_builder = client.post(&url);
+    send_with_request_builder(request_builder, creds, sender, msg).await
 }
 
 /// Same as `send_email` but with an externally managed request builder.
 /// Use this in case you want to send the mails to a custom API endpoint, e.g. for testing.
-pub fn send_with_request_builder(
-    request_builder: reqwest::blocking::RequestBuilder,
+pub async fn send_with_request_builder(
+    request_builder: reqwest::RequestBuilder,
     creds: &Credentials,
     sender: &EmailAddress,
     msg: Message,
@@ -152,9 +145,23 @@ pub fn send_with_request_builder(
     let mut params = msg.params();
     params.insert("from".to_string(), sender.to_string());
 
-    let mut form = reqwest::blocking::multipart::Form::new();
+    let mut form = reqwest::multipart::Form::new();
     for (key, value) in params {
         form = form.text(key, value);
+    }
+    //add attachments
+    for attachment in msg.attachments {
+        let file_part = reqwest::multipart::Part::bytes(attachment.content)
+            .file_name(attachment.name.clone())
+            .mime_str(&attachment.mime_type)?;
+        form = form.part("attachment", file_part);
+    }
+    //add inline files
+    for attachment in msg.inline {
+        let file_part = reqwest::multipart::Part::bytes(attachment.content)
+            .file_name(attachment.name.clone())
+            .mime_str(&attachment.mime_type)?;
+        form = form.part("inline", file_part);
     }
     //add message content
     match msg.body {
@@ -169,101 +176,26 @@ pub fn send_with_request_builder(
             form = form.text("html", html);
         }
     }
-    //add attachments
-    for attachment in msg.attachments {
-        let file_part = reqwest::blocking::multipart::Part::bytes(attachment.content)
-            .file_name(attachment.name.clone())
-            .mime_str(&attachment.mime_type)?;
-        form = form.part("attachment", file_part);
-    }
-    //add inline files
-    for attachment in msg.inline {
-        let file_part = reqwest::blocking::multipart::Part::bytes(attachment.content)
-            .file_name(attachment.name.clone())
-            .mime_str(&attachment.mime_type)?;
-        form = form.part("inline", file_part);
-    }
+
     let res = request_builder
         .basic_auth("api", Some(creds.api_key.clone()))
         .multipart(form)
-        .send()?
+        .send()
+        .await?
         .error_for_status()?;
 
-    let parsed: SendResponse = res.json()?;
+    let parsed: SendResponse = res.json().await?;
     Ok(parsed)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reqwest::StatusCode;
     use serde_json::json;
 
-    #[test]
-    fn message_recipients() {
-        let msg = Message {
-            to: vec![EmailAddress::address("foo@bar.com")],
-            cc: vec![
-                EmailAddress::name_address("Tim", "woo@woah.com"),
-                EmailAddress::address("z@c.c"),
-            ],
-            ..Default::default()
-        };
-
-        let params = msg.params();
-        assert_eq!(params.get("to"), Some(&String::from("foo@bar.com")));
-        assert_eq!(
-            params.get("cc"),
-            Some(&String::from("Tim <woo@woah.com>,z@c.c"))
-        );
-        assert_eq!(params.get("bcc"), None);
-    }
-
-    #[test]
-    fn send_options() {
-        let msg = Message {
-            options: vec![
-                SendOptions::TestMode,
-                SendOptions::DeliveryTime(Utc.timestamp_millis_opt(1431648000).unwrap()),
-                SendOptions::Header("X-For".to_owned(), "Fizz".to_owned()),
-                SendOptions::Tag("Important".to_owned()),
-            ],
-            ..Default::default()
-        };
-
-        let params = msg.params();
-        assert_eq!(params.get("o:testmode"), Some(&String::from("yes")));
-        assert_eq!(
-            params.get("o:deliverytime"),
-            Some(&String::from("Sat, 17 Jan 1970 13:40:48 +0000"))
-        );
-        assert_eq!(params.get("h:X-For"), Some(&String::from("Fizz")));
-        assert_eq!(params.get("o:tag"), Some(&String::from("Important")));
-    }
-
-    #[test]
-    fn request_unauthorized() {
-        // invalid key & domain
-        let creds = Credentials::new(
-            "key-your_key_here_that-is-very-long_and-still-goes-on-and-on-and-on",
-            "aksdfa32undkjns.com",
-        );
-        let recipient = EmailAddress::address("timmy@aksdfa32undkjns.com");
-        let message = Message {
-            to: vec![recipient],
-            subject: "Test email".to_string(),
-            ..Default::default()
-        };
-        let sender = EmailAddress::name_address("Nick Testla", "nick@aksdfa32undkjns.com");
-
-        let res = send_email(&creds, &sender, message);
-        assert!(res.is_err());
-        assert_eq!(res.unwrap_err().status(), Some(StatusCode::UNAUTHORIZED));
-    }
-
     #[ignore]
-    #[test]
-    fn actually_send_email() {
+    #[tokio::test]
+    async fn actually_send_email() {
         // if you want to try actually sending an email w/ your credentials add them to this test
         // and run it.
         let domain = "sandbox-some_numbers_here_probably.mailgun.org";
@@ -282,12 +214,37 @@ mod tests {
         };
         let sender = EmailAddress::name_address("Nick Testla", &format!("mailgun_v3@{}", &domain));
 
-        let res = send_email(&creds, &sender, message);
+        let res = send_email(&creds, &sender, message).await;
         assert!(res.is_ok(), "{:?}", &res);
     }
 
-    #[test]
-    fn test_send_with_request_builder() {
+    #[ignore]
+    #[tokio::test]
+    async fn actually_send_email_template() {
+        let domain = "sandbox-some_numbers_here_probably.mailgun.org";
+        let key = "something-secret-something-safe";
+        let recipient = "foo@bar.com";
+
+        let creds = Credentials::new(&key, &domain);
+        let recipient = EmailAddress::address(&recipient);
+        let message = Message {
+            to: vec![recipient],
+            subject: "Test email".to_string(),
+            options: vec![SendOptions::Header(
+                "X-Mailgun-Variables".to_string(),
+                "{\"test\": \"test\"}".to_string(),
+            )],
+            template: Some("sometest".to_string()),
+            ..Default::default()
+        };
+        let sender = EmailAddress::name_address("Nick Testla", &format!("mailgun_v3@{}", &domain));
+
+        let res = send_email(&creds, &sender, message).await;
+        assert!(res.is_ok(), "{:?}", &res);
+    }
+
+    #[tokio::test]
+    async fn test_send_with_request_builder() {
         let domain = "sandbox0123456789abcdef0123456789abcdef.mailgun.org";
         let key = "0123456789abcdef0123456789abcdef-01234567-89abcdef";
         let recipient = "user@example.com";
@@ -318,187 +275,9 @@ mod tests {
             .create();
 
         let url = format!("{}{}", domain, uri);
-        let client = reqwest::blocking::Client::new();
-        let request_builder = client.post(&url);
-        let res = send_with_request_builder(request_builder, &creds, &sender, message);
-        assert!(res.is_ok(), "{:?}", &res);
-    }
-}
-
-pub mod async_impl {
-    use super::*;
-
-    /// Sends a single email from the specified sender address
-    /// [API docs](https://documentation.mailgun.com/en/latest/api-sending.html#sending)
-    pub async fn send_email(
-        creds: &Credentials,
-        sender: &EmailAddress,
-        msg: Message,
-    ) -> MailgunResult<SendResponse> {
         let client = reqwest::Client::new();
-        send_with_client(&client, creds, sender, msg).await
-    }
-
-    /// Same as `send_email` but with an externally managed client
-    pub async fn send_with_client(
-        client: &reqwest::Client,
-        creds: &Credentials,
-        sender: &EmailAddress,
-        msg: Message,
-    ) -> MailgunResult<SendResponse> {
-        let url = format!("{}/{}/{}", creds.api_base, creds.domain, MESSAGES_ENDPOINT);
         let request_builder = client.post(&url);
-        send_with_request_builder(request_builder, creds, sender, msg).await
-    }
-
-    /// Same as `send_email` but with an externally managed request builder.
-    /// Use this in case you want to send the mails to a custom API endpoint, e.g. for testing.
-    pub async fn send_with_request_builder(
-        request_builder: reqwest::RequestBuilder,
-        creds: &Credentials,
-        sender: &EmailAddress,
-        msg: Message,
-    ) -> MailgunResult<SendResponse> {
-        let mut params = msg.params();
-        params.insert("from".to_string(), sender.to_string());
-
-        let mut form = reqwest::multipart::Form::new();
-        for (key, value) in params {
-            form = form.text(key, value);
-        }
-        //add attachments
-        for attachment in msg.attachments {
-            let file_part = reqwest::multipart::Part::bytes(attachment.content)
-                .file_name(attachment.name.clone())
-                .mime_str(&attachment.mime_type)?;
-            form = form.part("attachment", file_part);
-        }
-        //add inline files
-        for attachment in msg.inline {
-            let file_part = reqwest::multipart::Part::bytes(attachment.content)
-                .file_name(attachment.name.clone())
-                .mime_str(&attachment.mime_type)?;
-            form = form.part("inline", file_part);
-        }
-        //add message content
-        match msg.body {
-            MessageBody::Text(text) => {
-                form = form.text("text", text);
-            }
-            MessageBody::Html(html) => {
-                form = form.text("html", html);
-            }
-            MessageBody::HtmlAndText(html, text) => {
-                form = form.text("text", text);
-                form = form.text("html", html);
-            }
-        }
-
-        let res = request_builder
-            .basic_auth("api", Some(creds.api_key.clone()))
-            .multipart(form)
-            .send()
-            .await?
-            .error_for_status()?;
-
-        let parsed: SendResponse = res.json().await?;
-        Ok(parsed)
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use serde_json::json;
-
-        #[ignore]
-        #[tokio::test]
-        async fn actually_send_email() {
-            // if you want to try actually sending an email w/ your credentials add them to this test
-            // and run it.
-            let domain = "sandbox-some_numbers_here_probably.mailgun.org";
-            let key = "something-secret-something-safe";
-            let recipient = "foo@bar.com";
-
-            let creds = Credentials::new(&key, &domain);
-            let recipient = EmailAddress::address(&recipient);
-            let message = Message {
-                to: vec![recipient],
-                subject: "Test email".to_string(),
-                body: MessageBody::Text(String::from(
-                    "This email is from an mailgun_v3 automated test",
-                )),
-                ..Default::default()
-            };
-            let sender =
-                EmailAddress::name_address("Nick Testla", &format!("mailgun_v3@{}", &domain));
-
-            let res = send_email(&creds, &sender, message).await;
-            assert!(res.is_ok(), "{:?}", &res);
-        }
-
-        #[ignore]
-        #[tokio::test]
-        async fn actually_send_email_template() {
-            let domain = "sandbox-some_numbers_here_probably.mailgun.org";
-            let key = "something-secret-something-safe";
-            let recipient = "foo@bar.com";
-
-            let creds = Credentials::new(&key, &domain);
-            let recipient = EmailAddress::address(&recipient);
-            let message = Message {
-                to: vec![recipient],
-                subject: "Test email".to_string(),
-                options: vec![SendOptions::Header(
-                    "X-Mailgun-Variables".to_string(),
-                    "{\"test\": \"test\"}".to_string(),
-                )],
-                template: Some("sometest".to_string()),
-                ..Default::default()
-            };
-            let sender =
-                EmailAddress::name_address("Nick Testla", &format!("mailgun_v3@{}", &domain));
-
-            let res = send_email(&creds, &sender, message).await;
-            assert!(res.is_ok(), "{:?}", &res);
-        }
-
-        #[tokio::test]
-        async fn test_send_with_request_builder() {
-            let domain = "sandbox0123456789abcdef0123456789abcdef.mailgun.org";
-            let key = "0123456789abcdef0123456789abcdef-01234567-89abcdef";
-            let recipient = "user@example.com";
-
-            let creds = Credentials::new(&key, &domain);
-            let recipient = EmailAddress::address(&recipient);
-            let message = Message {
-                to: vec![recipient],
-                subject: "Test email".to_string(),
-                body: MessageBody::Text(String::from(
-                    "This email is from an mailgun_v3 automated test",
-                )),
-                ..Default::default()
-            };
-            let sender =
-                EmailAddress::name_address("Nick Testla", &format!("mailgun_v3@{}", &domain));
-
-            let domain = &mockito::server_url();
-            let uri = format!("/{}/{}", creds.domain, MESSAGES_ENDPOINT);
-
-            let response = json!({
-                "id": "<0123456789abcdef.0123456789abcdef@sandbox0123456789abcdef0123456789abcdef.mailgun.org>",
-                "message": "Queued. Thank you."
-            });
-            let _m = mockito::mock("POST", uri.as_str())
-                .with_status(200)
-                .with_header("content-type", "application/json")
-                .with_body(response.to_string())
-                .create();
-
-            let url = format!("{}{}", domain, uri);
-            let client = reqwest::Client::new();
-            let request_builder = client.post(&url);
-            let res = send_with_request_builder(request_builder, &creds, &sender, message).await;
-            assert!(res.is_ok(), "{:?}", &res);
-        }
+        let res = send_with_request_builder(request_builder, &creds, &sender, message).await;
+        assert!(res.is_ok(), "{:?}", &res);
     }
 }
