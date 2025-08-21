@@ -10,9 +10,6 @@ keywords = ["mailgun", "reqwest", "email", "api"]
 categories = ["api-bindings"]
 edition = "2021"
 
-[badges]
-travis-ci = { repository = "otterandrye/mailgun_v3", branch = "master" }
-
 [dependencies]
 chrono = { version = "^0.4.23", default-features = false, features = ["clock"] }
 lazy_static = "1.4.0"
