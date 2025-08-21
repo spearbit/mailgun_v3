@@ -32,14 +32,17 @@ const VALIDATION_ENDPOINT: &str = "address/private/validate";
 //     --data-urlencode address='foo@mailgun.net'
 /// Validate an email using mailgun's validation service
 /// [API docs](https://documentation.mailgun.com/en/latest/api-email-validation.html#email-validation)
-pub fn validate_email(creds: &Credentials, address: &str) -> MailgunResult<ValidationResponse> {
-    let client = reqwest::blocking::Client::new();
-    validate_email_with_client(&client, creds, address)
+pub async fn validate_email(
+    creds: &Credentials,
+    address: &str,
+) -> MailgunResult<ValidationResponse> {
+    let client = reqwest::Client::new();
+    validate_email_with_client(&client, creds, address).await
 }
 
 /// Same as `validate_email` but with an externally managed client
-pub fn validate_email_with_client(
-    client: &reqwest::blocking::Client,
+pub async fn validate_email_with_client(
+    client: &reqwest::Client,
     creds: &Credentials,
     address: &str,
 ) -> MailgunResult<ValidationResponse> {
@@ -51,10 +54,11 @@ pub fn validate_email_with_client(
         .get(url)
         .basic_auth("api", Some(creds.api_key.clone()))
         .form(&params)
-        .send()?
+        .send()
+        .await?
         .error_for_status()?;
 
-    let parsed: ValidationResponse = res.json()?;
+    let parsed: ValidationResponse = res.json().await?;
     Ok(parsed)
 }
 
@@ -63,13 +67,13 @@ mod tests {
     use super::*;
 
     #[ignore]
-    #[test]
-    fn run_validate_email() {
+    #[tokio::test]
+    async fn run_validate_email() {
         // add your api key here to run the tests - accounts get 100 validations/month free
         let key = "something-secret-something-safe";
         let creds = Credentials::new(&key, "not needed");
 
-        let res = validate_email(&creds, "james.earl.jones@gmail.com");
+        let res = validate_email(&creds, "james.earl.jones@gmail.com").await;
         assert!(res.is_ok(), "{:?}", &res);
         let parsed = res.unwrap();
         print!("got response: {:?}", parsed);
